@@ -1,0 +1,17 @@
+[package]
+name = "autoeletrica"
+version = "0.1.0"
+edition = "2021"
+description = "AutoEletrica - gestão de estoque de auto elétrica, local-first em Rust"
+license = "MIT"
+
+[dependencies]
+eframe = "0.29"
+rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = "0.4"
+# Foto da peça: só decode png/jpeg, o mínimo para o thumbnail.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+[profile.release]
+opt-level = 2
+strip = true
