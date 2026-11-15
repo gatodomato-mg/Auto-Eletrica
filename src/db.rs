@@ -441,6 +441,61 @@ impl Database {
             )
             .map_err(erro)
     }
+
+    /// Cópia consistente do banco (VACUUM INTO). Sobrescreve o destino.
+    pub fn backup(&self, destino: &Path) -> Res<()> {
+        if let Some(p) = destino.parent() {
+            let _ = std::fs::create_dir_all(p);
+        }
+        let _ = std::fs::remove_file(destino);
+        let destino = destino.to_string_lossy().replace('\'', "''");
+        self.conn
+            .execute_batch(&format!("VACUUM INTO '{destino}'"))
+            .map_err(erro)
+    }
+
+    /// Catálogo inteiro em CSV (; e decimal com vírgula, pronto para o Excel pt-BR).
+    pub fn exportar_csv(&self) -> Res<String> {
+        let itens = self.buscar("", false)?;
+        let mut s = String::from(
+            "sku;ean;cod_fabricante;oem;nome;marca;categoria;aplicacao;equivalentes;local;\
+unidade;custo;venda;estoque;estoque_min;ativo\n",
+        );
+        for p in itens {
+            let custo = format!("{:.2}", p.custo_cents as f64 / 100.0).replace('.', ",");
+            let venda = format!("{:.2}", p.preco_cents as f64 / 100.0).replace('.', ",");
+            let local = p.localizacao();
+            let campos = [
+                p.sku.clone(),
+                p.ean.clone(),
+                p.cod_fabricante.clone(),
+                p.oem.clone(),
+                p.nome.clone(),
+                p.marca.clone(),
+                p.categoria.clone(),
+                p.aplicacao.clone(),
+                p.equivalentes.clone(),
+                local,
+                p.unidade.sigla().to_string(),
+                custo,
+                venda,
+                m::qty_str(p.estoque),
+                m::qty_str(p.estoque_min),
+                if p.ativo { "1" } else { "0" }.to_string(),
+            ];
+            s.push_str(&campos.iter().map(|c| csv_campo(c)).collect::<Vec<_>>().join(";"));
+            s.push('\n');
+        }
+        Ok(s)
+    }
+}
+
+fn csv_campo(s: &str) -> String {
+    if s.contains([';', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }
 
 fn conflito(e: rusqlite::Error, sku: &str) -> String {
@@ -509,6 +564,27 @@ mod tests {
         assert!(db.abaixo_minimo().unwrap().is_empty());
         db.movimentar(id, MovTipo::Saida, 90.0, None, "").unwrap();
         assert_eq!(db.abaixo_minimo().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn backup_e_csv() {
+        let mut db = Database::open_memory().unwrap();
+        let mut p = peca("Relé; universal \"5 pinos\"", 500, 1500);
+        p.unidade = Unidade::Metro;
+        db.salvar(&p).unwrap();
+        db.movimentar(1, MovTipo::Entrada, 2.5, None, "teste").unwrap();
+
+        let csv = db.exportar_csv().unwrap();
+        assert!(csv.starts_with("sku;ean;"));
+        assert!(csv.contains("\"Relé; universal \"\"5 pinos\"\"\""));
+        assert!(csv.contains(";2,5;"));
+
+        let destino = std::env::temp_dir().join("autoeletrica_teste_backup.db");
+        let _ = std::fs::remove_file(&destino);
+        db.backup(&destino).unwrap();
+        let copia = Database::open(&destino).unwrap();
+        assert_eq!(copia.buscar("relé", false).unwrap().len(), 1);
+        let _ = std::fs::remove_file(&destino);
     }
 
     #[test]

@@ -27,3 +27,22 @@ Testes do motor de estoque: `cargo test --lib`.
 
 Fases seguintes: O.S. com reserva e baixa, PDV, base de troca e garantia de bateria,
 importação de XML da NF-e e relatórios (curva ABC, sem giro, lucratividade).
+
+## Backup e exportação
+
+- Ao abrir, uma cópia do banco vai para `backups\` ao lado do `.db` (mantém as 10 últimas).
+- Botão **Backup** grava na hora (`VACUUM INTO`, seguro com o app aberto).
+- Botão **Exportar CSV** gera o catálogo com `;` e vírgula decimal (Excel pt-BR).
+
+## Versões (git)
+
+```powershell
+cd C:\Users\Administrator\Desktop\AutoEletrica
+git log --oneline          # ver versões
+git diff                   # ver o que mudou desde o último save
+git checkout HEAD -- .     # voltar tudo ao último save
+git checkout <hash> -- src # voltar só um arquivo/pasta de uma versão antiga
+```
+
+Salvar uma versão nova: `powershell -File C:\Users\Administrator\cerebro\bin\versao.ps1 -Pasta . -Mensagem "o que mudou"`.
+

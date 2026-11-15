@@ -2,6 +2,7 @@
 
 use eframe::egui::{self, Color32, RichText};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use autoeletrica::db::Database;
 use autoeletrica::model::{
@@ -70,6 +71,7 @@ struct MovState {
 
 pub struct App {
     db: Database,
+    db_path: PathBuf,
     busca: String,
     filtro_min: bool,
     lista: Vec<Produto>,
@@ -85,10 +87,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, db: Database) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, db: Database, db_path: PathBuf) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let mut app = App {
             db,
+            db_path,
             busca: String::new(),
             filtro_min: false,
             lista: Vec::new(),
@@ -136,6 +139,44 @@ impl App {
     }
 
     /// Textura: carrega/decodeia imagem e devolve o TextureHandle. Cache apenas handles válidos.
+    /// Pasta de backups ao lado do banco.
+    fn pasta_backups(&self) -> PathBuf {
+        self.db_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("backups")
+    }
+
+    fn backup(&mut self) {
+        let destino = self
+            .pasta_backups()
+            .join(format!("autoeletrica-{}.db", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        match self.db.backup(&destino) {
+            Ok(()) => self.msg = Some((format!("backup: {}", destino.display()), false)),
+            Err(e) => self.msg = Some((e, true)),
+        }
+    }
+
+    fn exportar_csv(&mut self) {
+        let destino = self
+            .pasta_backups()
+            .join(format!("catalogo-{}.csv", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        let csv = match self.db.exportar_csv() {
+            Ok(c) => c,
+            Err(e) => {
+                self.msg = Some((e, true));
+                return;
+            }
+        };
+        if let Some(pai) = destino.parent() {
+            let _ = std::fs::create_dir_all(pai);
+        }
+        match std::fs::write(&destino, csv) {
+            Ok(()) => self.msg = Some((format!("CSV: {}", destino.display()), false)),
+            Err(e) => self.msg = Some((format!("erro ao gravar CSV: {e}"), true)),
+        }
+    }
+
     fn textura(&mut self, ctx: &egui::Context, caminho: &str) -> Option<egui::TextureHandle> {
         if caminho.trim().is_empty() {
             return None;
@@ -183,6 +224,12 @@ impl App {
                 ui.separator();
                 if ui.button("+ Novo produto").clicked() {
                     self.novo = Some(FormState::novo());
+                }
+                if ui.button("Backup").clicked() {
+                    self.backup();
+                }
+                if ui.button("Exportar CSV").clicked() {
+                    self.exportar_csv();
                 }
             });
             ui.add_space(2.0);
