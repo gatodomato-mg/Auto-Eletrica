@@ -13,11 +13,18 @@ fn money_txt(cents: i64) -> String {
     format!("{:.2}", cents as f64 / 100.0).replace('.', ",")
 }
 
-// Campos do grid: NÃO chamamos ui.end_row() aqui. O layout de 2 colunas é gerenciado
-// explicitamente no chamador (usando ui.columns ou Grid num_columns manual).
+/// Uma linha do grid de formulário: rótulo à esquerda, campo à direita.
+/// O Grid do egui não quebra linha sozinho, por isso o end_row aqui.
 fn campo_linha(ui: &mut egui::Ui, rotulo: &str, valor: &mut String) {
     ui.label(rotulo);
     ui.add(egui::TextEdit::singleline(valor).desired_width(250.0));
+    ui.end_row();
+}
+
+/// Rótulo clicável: qualquer célula da linha da lista abre a ficha da peça.
+fn celula(ui: &mut egui::Ui, texto: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.add(egui::Label::new(texto).sense(egui::Sense::click()))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 // ----------------------------------------------------------------
@@ -236,7 +243,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(format!("{} peças", self.resumo.itens));
                 ui.separator();
-                ui.label(format!("{:.3} un", self.resumo.unidades).replace('.', ","));
+                ui.label(format!("{} un", qty_str(self.resumo.unidades)));
                 ui.separator();
                 ui.label(format!("custo {}", brl(self.resumo.custo_cents)));
                 ui.separator();
@@ -266,11 +273,11 @@ impl App {
     }
 
     fn lista(&mut self, ctx: &egui::Context) {
-        let clicado = None;
+        let mut clicado = None;
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 egui::Grid::new("lista").num_columns(8).striped(true).spacing([12.0, 4.0]).show(ui, |ui| {
-                    for titulo in ["Código", "Peça", "Aplicação", "Local", "Estoque", "Custo", "Venda", ""] {
+                    for titulo in ["Código", "Peça", "Aplicação", "Local", "Estoque", "Custo", "Venda", "Margem"] {
                         ui.label(RichText::new(titulo).strong().size(12.0));
                     }
                     ui.end_row();
@@ -278,33 +285,41 @@ impl App {
                     for p in &self.lista {
                         let id = p.id.unwrap_or(0);
                         let sel = self.selecionado == Some(id);
-                        // Linha 0: Código
-                        ui.label(if sel { RichText::new(&p.sku).strong() } else { RichText::new(&p.sku) });
-                        // Linha 1: Nome + Marca
-                        let nome_texto = format!("{}{}", p.nome, if p.marca.is_empty() { String::new() } else { format!(" · {}", p.marca) });
-                        ui.label(if sel { RichText::new(&nome_texto).strong() } else { RichText::new(&nome_texto) });
-                        // Linha 2: Aplicação (resumida + tooltip)
+                        let mut hit = false;
+                        // Qualquer célula abre a ficha; o nome mostra a seleção.
+                        hit |= celula(ui, p.sku.as_str()).clicked();
+                        let nome_texto = format!(
+                            "{}{}",
+                            p.nome,
+                            if p.marca.is_empty() { String::new() } else { format!(" · {}", p.marca) }
+                        );
+                        let nome = RichText::new(&nome_texto);
+                        let nome = if sel { nome.strong() } else { nome };
+                        hit |= ui.selectable_label(sel, nome).clicked();
                         let curta: String = p.aplicacao.chars().take(34).collect();
-                        ui.label(if curta.is_empty() { "—".into() } else { curta });
-                        // Tooltip sobre aplicação completa
-                        let _app_tooltip = if p.aplicacao.is_empty() { "—" } else { &p.aplicacao };
-                        ui.add_space(2.0); // para o tooltip aparecer ao lado
-                        // Linha 3: Localização
-                        ui.label(p.localizacao());
-                        // Linha 4: Estoque + unidade
+                        let app = if curta.is_empty() { "—" } else { curta.as_str() };
+                        hit |= celula(ui, app)
+                            .on_hover_text(if p.aplicacao.is_empty() { "—" } else { p.aplicacao.as_str() })
+                            .clicked();
+                        hit |= celula(ui, p.localizacao()).clicked();
                         let estoque_texto = format!("{} {}", qty_str(p.estoque), p.unidade.sigla());
                         if p.abaixo_minimo() {
-                            ui.label(RichText::new(format!("⚠ {estoque_texto}")).color(Color32::from_rgb(255, 140, 90)));
+                            hit |= celula(
+                                ui,
+                                RichText::new(format!("⚠ {estoque_texto}"))
+                                    .color(Color32::from_rgb(255, 140, 90)),
+                            )
+                            .clicked();
                         } else {
-                            ui.label(estoque_texto);
+                            hit |= celula(ui, estoque_texto).clicked();
                         }
-                        // Linha 5: Custo
-                        ui.label(brl(p.custo_cents));
-                        // Linha 6: Venda
-                        ui.label(brl(p.preco_cents));
-                        // Linha 7: Margem
-                        let margem = p.margem().map(|m| format!("{m:.0}%")).unwrap_or_default();
-                        ui.label(margem);
+                        hit |= celula(ui, brl(p.custo_cents)).clicked();
+                        hit |= celula(ui, brl(p.preco_cents)).clicked();
+                        hit |= celula(ui, p.margem().map(|m| format!("{m:.0}%")).unwrap_or_default())
+                            .clicked();
+                        if hit {
+                            clicado = Some(id);
+                        }
                         ui.end_row();
                     }
                 });
@@ -359,64 +374,34 @@ impl App {
 
                     ui.separator();
                     ui.label(RichText::new("Dados da peça").strong());
-                    // Grid 2 colunas: usamos egui::Grid manual, NÃO colocamos end_row em campo_linha
                     egui::Grid::new("campos").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
                         campo_linha(ui, "Código interno", &mut form.p.sku);
-                        // segunda coluna da linha 1 fica vazia para alinhar; o próximo campo ocupa a linha completa
-                        // Para grid 2 colunas, após o primeiro campo da linha, o segundo precisa ser explicitamente
-                        // ou deixamos a próxima chamada preencher. Vamos usar o padrão: cada par de campo_linha
-                        // ocupa uma linha no grid de 2 colunas.
-                        // Linha 1: Código interno | (vazio)
-                        // O próximo campo_linha abaixo começará nova linha no grid.
-                        // Para não deixar espaço em branco, vamos simplesmente chamar campo_linha para cada campo;
-                        // o egui Grid com num_columns(2) consome 2 campos por linha.
-                        // Então precisamos agrupar em pares. Para simplificar, vamos usar layout horizontal manual
-                        // para campos de 1 coluna, ou usar Grid da forma correta.
-                        // Vamos adotar: cada campo_linha ocupa 1 "celula" e avançamos a coluna implicitamente.
-                        // Para grid 2 colunas, basta chamar campo_linha duas vezes; o egui as coloca em linha.
-                        // Vamos testar: aqui faremos os campos em pares via columnas egui.
-                        // Para não complicar, vamos usar o egui::ComboBox e editáveis diretamente sem o helper campo_linha
-                        // para este grid complexo. Voltaremos ao campo_linha simples nas outras telas.
-                        //
-                        // Reescrevendo o grid de forma mais simples: listamos os campos um por linha, mas
-                        // usando o Grid como container de alinhamento visual. Cada campo ocupará as 2 colunas
-                        // via .column( egui::Align::MAX ) ou simplesmente permitiremos que cada campo ocupa a largura total.
-                        // Dado o tempo, vamos simplificar: grid 2 colunas mas cada campo usa a largura total (monoesperto).
-                        // Isso evita o bug do end_row bugado.
-
-                        // --- Revertendo para layout simples: cada campo ocupa linha única, alinhado à esquerda ---
-                        // Botamos o grid apenas para ter uma margem/spacing consistente, mas cada campo será
-                        // um único item à esquerda.
-                        let _ = ui; // evitar warning; vamos usar egui::Frame ou similar. Em vez disso, vou reescrever o grid.
-                    });
-
-                    // Layout simplificado: usamos egui::CollapsingHeader ou Grid mas cada campo ocupa toda linha.
-                    // Para não perder tempo ajustando grid de 2 colunas com helper bugado, vou usar egui::Grid
-                    // mas chamando fields de forma que cada um pegue as 2 colunas. Farei um grid num_columns(1)
-                    // efetivo para este painel, ou usarei rows horizontais. Vamos recomeçar o grid abaixo com num_columns(1).
-
-                    // --- Vamos reescrever o restante do detalhe usando Grid num_columns(1) para simplicidade ---
-                    egui::Grid::new("campos_v2").num_columns(1).spacing([8.0, 4.0]).show(ui, |ui| {
-                        ui.label("Código de barras"); ui.add(egui::TextEdit::singleline(&mut form.p.ean).desired_width(250.0));
-                        ui.label("Cód. fabricante"); ui.add(egui::TextEdit::singleline(&mut form.p.cod_fabricante).desired_width(250.0));
-                        ui.label("Cód. original (OEM)"); ui.add(egui::TextEdit::singleline(&mut form.p.oem).desired_width(250.0));
-                        ui.label("Nome"); ui.add(egui::TextEdit::singleline(&mut form.p.nome).desired_width(250.0));
-                        ui.label("Marca"); ui.add(egui::TextEdit::singleline(&mut form.p.marca).desired_width(250.0));
-                        ui.label("Categoria"); ui.add(egui::TextEdit::singleline(&mut form.p.categoria).desired_width(250.0));
-                        ui.label("Aplicação"); ui.add(egui::TextEdit::multiline(&mut form.p.aplicacao).desired_rows(3).desired_width(250.0));
-                        ui.label("Equivalentes"); ui.add(egui::TextEdit::multiline(&mut form.p.equivalentes).desired_rows(2).desired_width(250.0));
-                        ui.label("Corredor"); ui.add(egui::TextEdit::singleline(&mut form.p.corredor).desired_width(250.0));
-                        ui.label("Prateleira"); ui.add(egui::TextEdit::singleline(&mut form.p.prateleira).desired_width(250.0));
-                        ui.label("Gaveta"); ui.add(egui::TextEdit::singleline(&mut form.p.gaveta).desired_width(250.0));
-                        ui.label("Unidade"); egui::ComboBox::from_id_salt("unidade_sel")
+                        campo_linha(ui, "Código de barras", &mut form.p.ean);
+                        campo_linha(ui, "Cód. fabricante", &mut form.p.cod_fabricante);
+                        campo_linha(ui, "Cód. original (OEM)", &mut form.p.oem);
+                        campo_linha(ui, "Nome", &mut form.p.nome);
+                        campo_linha(ui, "Marca", &mut form.p.marca);
+                        campo_linha(ui, "Categoria", &mut form.p.categoria);
+                        ui.label("Aplicação");
+                        ui.add(egui::TextEdit::multiline(&mut form.p.aplicacao).desired_rows(3).desired_width(250.0));
+                        ui.end_row();
+                        ui.label("Equivalentes");
+                        ui.add(egui::TextEdit::multiline(&mut form.p.equivalentes).desired_rows(2).desired_width(250.0));
+                        ui.end_row();
+                        campo_linha(ui, "Corredor", &mut form.p.corredor);
+                        campo_linha(ui, "Prateleira", &mut form.p.prateleira);
+                        campo_linha(ui, "Gaveta", &mut form.p.gaveta);
+                        ui.label("Unidade");
+                        egui::ComboBox::from_id_salt("unidade_sel")
                             .selected_text(form.p.unidade.rotulo())
                             .show_ui(ui, |ui| {
                                 for u in Unidade::TODAS { ui.selectable_value(&mut form.p.unidade, u, u.rotulo()); }
                             });
-                        ui.label("Foto (caminho)"); ui.add(egui::TextEdit::singleline(&mut form.p.foto).desired_width(250.0));
-                        ui.label("Custo (R$)"); ui.add(egui::TextEdit::singleline(&mut form.custo).desired_width(250.0));
-                        ui.label("Venda (R$)"); ui.add(egui::TextEdit::singleline(&mut form.preco).desired_width(250.0));
-                        ui.label("Estoque mínimo"); ui.add(egui::TextEdit::singleline(&mut form.minimo).desired_width(250.0));
+                        ui.end_row();
+                        campo_linha(ui, "Foto (caminho)", &mut form.p.foto);
+                        campo_linha(ui, "Custo (R$)", &mut form.custo);
+                        campo_linha(ui, "Venda (R$)", &mut form.preco);
+                        campo_linha(ui, "Estoque mínimo", &mut form.minimo);
                     });
 
                     ui.add_space(6.0);
@@ -486,8 +471,8 @@ impl App {
                     }
 
                     ui.add_space(8.0);
-                    // Devolve o form ao estado do app (eventuais alterações ficam salvas em form.p)
-                    self.form = Some(form);
+                    // Depois de salvar, a ficha recém-carregada do banco já está aqui: não sobrescrever.
+                    self.form.get_or_insert(form);
                     self.mostrar_aviso(ui);
                 });
             });
@@ -507,6 +492,7 @@ impl App {
         egui::Window::new(mov.tipo.rotulo())
             .collapsible(false)
             .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .open(&mut aberto)
             .show(ctx, |ui| {
                 ui.label(&mov.nome);
@@ -577,9 +563,10 @@ impl App {
         egui::Window::new("Nova peça")
             .collapsible(false)
             .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .open(&mut aberto)
             .show(ctx, |ui| {
-                egui::Grid::new("novo_campos").num_columns(1).spacing([8.0, 4.0]).show(ui, |ui| {
+                egui::Grid::new("novo_campos").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
                     campo_linha(ui, "Nome *", &mut form.p.nome);
                     campo_linha(ui, "Marca", &mut form.p.marca);
                     campo_linha(ui, "Categoria", &mut form.p.categoria);
@@ -587,20 +574,26 @@ impl App {
                     campo_linha(ui, "Código de barras", &mut form.p.ean);
                     campo_linha(ui, "Cód. fabricante", &mut form.p.cod_fabricante);
                     campo_linha(ui, "Cód. original (OEM)", &mut form.p.oem);
-                    ui.label("Aplicação"); ui.add(egui::TextEdit::multiline(&mut form.p.aplicacao).desired_rows(3).desired_width(250.0));
-                    ui.label("Equivalentes"); ui.add(egui::TextEdit::multiline(&mut form.p.equivalentes).desired_rows(2).desired_width(250.0));
+                    ui.label("Aplicação");
+                    ui.add(egui::TextEdit::multiline(&mut form.p.aplicacao).desired_rows(3).desired_width(250.0));
+                    ui.end_row();
+                    ui.label("Equivalentes");
+                    ui.add(egui::TextEdit::multiline(&mut form.p.equivalentes).desired_rows(2).desired_width(250.0));
+                    ui.end_row();
                     campo_linha(ui, "Corredor", &mut form.p.corredor);
                     campo_linha(ui, "Prateleira", &mut form.p.prateleira);
                     campo_linha(ui, "Gaveta", &mut form.p.gaveta);
-                    ui.label("Unidade"); egui::ComboBox::from_id_salt("novo_unidade")
+                    ui.label("Unidade");
+                    egui::ComboBox::from_id_salt("novo_unidade")
                         .selected_text(form.p.unidade.rotulo())
                         .show_ui(ui, |ui| {
                             for u in Unidade::TODAS { ui.selectable_value(&mut form.p.unidade, u, u.rotulo()); }
                         });
-                    ui.label("Custo (R$)"); ui.add(egui::TextEdit::singleline(&mut form.custo).desired_width(250.0));
-                    ui.label("Venda (R$)"); ui.add(egui::TextEdit::singleline(&mut form.preco).desired_width(250.0));
-                    ui.label("Estoque mínimo"); ui.add(egui::TextEdit::singleline(&mut form.minimo).desired_width(250.0));
-                    ui.label("Foto (caminho)"); ui.add(egui::TextEdit::singleline(&mut form.p.foto).desired_width(250.0));
+                    ui.end_row();
+                    campo_linha(ui, "Custo (R$)", &mut form.custo);
+                    campo_linha(ui, "Venda (R$)", &mut form.preco);
+                    campo_linha(ui, "Estoque mínimo", &mut form.minimo);
+                    campo_linha(ui, "Foto (caminho)", &mut form.p.foto);
                 });
                 ui.add_space(4.0);
                 if ui.button("Cadastrar").clicked() {

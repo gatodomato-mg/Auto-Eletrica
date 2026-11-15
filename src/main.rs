@@ -56,8 +56,9 @@ fn main() -> eframe::Result<()> {
 
     let opcoes = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 860.0])
-            .with_min_inner_size([980.0, 640.0])
+            // 1366×768 é o notebook típico do balcão; 680 de altura cabe na área útil (728 px).
+            .with_inner_size([1200.0, 680.0])
+            .with_min_inner_size([960.0, 600.0])
             .with_title("AutoElétrica — estoque"),
         ..Default::default()
     };
